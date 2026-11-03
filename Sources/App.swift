@@ -91,6 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? await Task.sleep(for: .seconds(3))
             print("widget", panel?.frame ?? .zero, "detail", detail?.panel.frame ?? .zero, "key", detail?.panel.isKeyWindow ?? false,
                   "points", detail?.model.series.map(\.points.count) ?? [], "loaded", detail?.model.loaded ?? false)
+            if let model = detail?.model, let f = option("--zoom").flatMap(Double.init) {
+                model.zoom(by: 1 / f)
+                try? await Task.sleep(for: .seconds(2))
+                print("zoomed", model.zoomLabel ?? "-", "period", model.period?.name ?? "raw", "points", model.series.map(\.points.count))
+            }
             fflush(stdout)
         }
     }
@@ -153,10 +158,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let host = TrackingHostingView(rootView: root)
         host.sizingOptions = [] // the panel's frame comes from the widget, the view fills it
-        host.onMouse = { [weak model] point in
+        let hover = { [weak model] (point: CGPoint?) in
             guard let model else { return }
             let plot = model.plotFrame.insetBy(dx: 0, dy: -8)
             model.hover = point.flatMap { plot.contains($0) ? model.hoverDate(atX: $0.x) : nil }
+        }
+        host.onMouse = hover
+        // two-finger swipe / wheel over the chart pans a zoomed view, a pinch zooms at the cursor
+        host.onScroll = { [weak model] event, point in
+            guard let model, model.plotFrame.width > 0, model.plotFrame.insetBy(dx: 0, dy: -8).contains(point) else { return false }
+            let (dx, dy) = (event.scrollingDeltaX, event.scrollingDeltaY)
+            // a plain wheel only has dy, in lines
+            let d = (abs(dx) >= abs(dy) ? dx : dy) * (event.hasPreciseScrollingDeltas ? 1 : 12)
+            model.pan(by: -d / model.plotFrame.width)
+            hover(point)
+            return true
+        }
+        host.onMagnify = { [weak model] event, point in
+            guard let model else { return false }
+            model.zoom(by: 1 / max(1 + event.magnification, 0.2), around: model.hoverDate(atX: point.x))
+            hover(point)
+            return true
         }
         let panel = DetailPanel(contentRect: NSRect(x: 0, y: 0, width: detailWidth, height: 300))
         panel.contentView = host
@@ -193,10 +215,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.closeDetail() }
         }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            guard event.keyCode == 53 else { return event } // Esc
-            MainActor.assumeIsolated { self?.closeDetail() }
-            return nil
+            MainActor.assumeIsolated { self?.key(event) ?? false } ? nil : event
         }) { monitors.append(m) }
+    }
+
+    /// Esc closes; + − 0 and ← → zoom and pan, like a map
+    private func key(_ event: NSEvent) -> Bool {
+        guard let model = detail?.model else { return false }
+        switch (event.keyCode, event.charactersIgnoringModifiers) {
+        case (53, _): closeDetail()
+        case (123, _): model.pan(by: -0.25)
+        case (124, _): model.pan(by: 0.25)
+        case (_, "+"?), (_, "="?): model.zoom(by: 0.5)
+        case (_, "-"?): model.zoom(by: 2)
+        case (_, "0"?): model.resetZoom()
+        default: return false
+        }
+        return true
     }
 
     // MARK: --watch: no window, print every visible change (debugging the live feed)
@@ -211,7 +246,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: --snapshot <png> [--detail <isp>:<rx_power|tx_power|optic_temperature|latency|rates|status>:<1h|24h|7d> [--hover <0…1>]]
+    // MARK: --snapshot <png> [--detail <isp>:<rx_power|tx_power|optic_temperature|latency|rates|status>:<1h|24h|7d>
+    //                         [--zoom <×> [--pan <share>]] [--hover <0…1>]]
     // renders once with live data, for checking the layout headless
 
     private func snapshot(to path: String) {
@@ -230,8 +266,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let model = DetailModel(target: DetailTarget(row: row.id, kind: kind), store: store, client: client) else { exit(2) }
                 model.range = TimeRange(rawValue: spec[2]) ?? .day
                 await model.fetch()
+                if let f = option("--zoom").flatMap(Double.init) {
+                    model.zoom(by: 1 / f)
+                    if let share = option("--pan").flatMap(Double.init) { model.pan(by: share) }
+                    await model.fetch()
+                }
                 if let frac = option("--hover").flatMap(Double.init) {
-                    let w = model.window
+                    let w = model.visible
                     model.hover = w.lowerBound.addingTimeInterval(w.upperBound.timeIntervalSince(w.lowerBound) * frac)
                 }
                 content = AnyView(DetailView(model: model).frame(height: widgetHeight))
@@ -358,6 +399,9 @@ final class DesktopHostingView<Content: View>: NSHostingView<Content> {
 /// it working while the app is inactive, which SwiftUI's own hover is not.
 final class TrackingHostingView<Content: View>: NSHostingView<Content> {
     var onMouse: ((CGPoint?) -> Void)?
+    /// true = handled
+    var onScroll: ((NSEvent, CGPoint) -> Bool)?
+    var onMagnify: ((NSEvent, CGPoint) -> Bool)?
     private var area: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -376,6 +420,14 @@ final class TrackingHostingView<Content: View>: NSHostingView<Content> {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         onMouse?(nil)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if onScroll?(event, topLeft(event)) != true { super.scrollWheel(with: event) }
+    }
+
+    override func magnify(with event: NSEvent) {
+        if onMagnify?(event, topLeft(event)) != true { super.magnify(with: event) }
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

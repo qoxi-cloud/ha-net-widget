@@ -21,8 +21,8 @@ Builds `~/Applications/NetWidget.app` and the LaunchAgent `cloud.qoxi.netwidget`
 `HA_CLOUD_URL` is optional (LAN only without it).
 
 Debug (`build/NetWidget.app/Contents/MacOS/NetWidget …`): `--watch` prints changes;
-`--snapshot out.png [--detail <isp>:<rx_power|tx_power|optic_temperature|latency|rates|status>:<1h|24h|7d> [--hover 0.5]]`
-renders the widget or a detail panel once with live data; `--click x,y` clicks the real
+`--snapshot out.png [--detail <isp>:<rx_power|tx_power|optic_temperature|latency|rates|status>:<1h|24h|7d> [--zoom 4 [--pan -0.5]] [--hover 0.5]]`
+renders the widget or a detail panel once with live data; `--click x,y [--zoom 4]` clicks the real
 window at widget coordinates and prints the hit map (stop the LaunchAgent first).
 
 ## Token
@@ -49,8 +49,13 @@ Click (no drag) opens a detail panel beside the widget, like HA's more-info:
 - ↓/↑ → download and upload on one chart
 - provider name → WAN / PON status timeline with uptime and outages
 
+Zoom: the magnifier buttons (or `+` / `-`), a pinch at the cursor; pan a zoomed chart with a
+two-finger swipe / the wheel or `←` / `→`; the selected range again (or `0`) zooms back out.
+Zoomed in, finer data is fetched for what's on screen (raw states up to 3 h, 5-minute
+statistics up to 2 days), so a 7d chart can be followed down to single state changes.
+
 Hover shows the value under the cursor; Esc or a click elsewhere closes it; "Open in HA"
-opens the entity history in HA. Data is fetched on open (and every 30 s while open) over
+opens the entity history in HA for the range on screen. Data is fetched on open (and every 30 s while open) over
 the same websocket, so it works via the cloud too.
 
 Starts by itself at login (LaunchAgent, `RunAtLoad`) and is restarted after a crash;

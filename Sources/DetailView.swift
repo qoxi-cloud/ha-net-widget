@@ -30,11 +30,17 @@ struct DetailView: View {
                     .lineLimit(1)
             }
 
-            rangePicker
+            HStack {
+                rangePicker
+                Spacer(minLength: 8)
+                zoomControls
+            }
 
             ZStack {
                 if model.target.kind == .status { StatusTimeline(model: model) } else { MetricChart(model: model) }
-                if !model.loaded {
+                if model.noData {
+                    Text("No data for this period").font(.system(size: 11)).foregroundStyle(.secondary)
+                } else if !model.loaded {
                     if let error = model.error {
                         Text(error).font(.system(size: 11)).foregroundStyle(.orange)
                     } else {
@@ -72,7 +78,8 @@ struct DetailView: View {
     private var rangePicker: some View {
         HStack(spacing: 2) {
             ForEach(TimeRange.allCases) { r in
-                Button(action: { model.range = r }) {
+                // the selected range again = zoom back out
+                Button(action: { if model.range == r { model.resetZoom() } else { model.range = r } }) {
                     Text(r.rawValue)
                         .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 10)
@@ -87,6 +94,34 @@ struct DetailView: View {
         .padding(2)
         .background(Capsule().fill(Color.primary.opacity(0.06)))
     }
+
+    private var zoomControls: some View {
+        HStack(spacing: 2) {
+            zoomButton("minus.magnifyingglass", enabled: model.canZoomOut) { model.zoom(by: 2) }
+            if let label = model.zoomLabel {
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            zoomButton("plus.magnifyingglass", enabled: model.canZoomIn) { model.zoom(by: 0.5) }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
+    }
+
+    private func zoomButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(enabled ? .primary : .tertiary)
+        .disabled(!enabled)
+    }
 }
 
 func toneColor(_ tone: Tone) -> Color {
@@ -97,21 +132,30 @@ func toneColor(_ tone: Tone) -> Color {
     }
 }
 
-private func xAxisFormat(_ range: TimeRange) -> Date.FormatStyle {
-    range == .week ? .dateTime.weekday(.abbreviated) : .dateTime.hour().minute()
+/// midnight names the day (a week shows only days), other ticks the time
+private func tickLabel(_ t: Date) -> String {
+    let c = Calendar.current.dateComponents([.hour, .minute], from: t)
+    return t.formatted(c.hour == 0 && c.minute == 0 ? .dateTime.weekday(.abbreviated) : .dateTime.hour().minute())
 }
 
-/// round ticks (:15, every 6 h, midnight) kept clear of the edges, where labels would be clipped
-private func xTicks(_ w: ClosedRange<Date>, _ range: TimeRange) -> [Date] {
+/// round ticks (:15, every 6 h, midnight) at the finest step that leaves room for the
+/// labels, kept clear of the edges, where labels would be clipped
+private func xTicks(_ w: ClosedRange<Date>) -> [Date] {
+    let steps: [(Calendar.Component, Int)] = [
+        (.minute, 1), (.minute, 2), (.minute, 5), (.minute, 10), (.minute, 15), (.minute, 30),
+        (.hour, 1), (.hour, 2), (.hour, 3), (.hour, 6), (.hour, 12), (.day, 1),
+    ]
+    let span = w.upperBound.timeIntervalSince(w.lowerBound)
+    let seconds = { (s: (Calendar.Component, Int)) in Double(s.1) * (s.0 == .minute ? 60 : s.0 == .hour ? 3600 : 86400) }
+    // weekday labels are narrower than times
+    let step = steps.first { span / seconds($0) <= ($0.0 == .day ? 7.5 : 5) } ?? (.day, 1)
     let cal = Calendar.current
     var c = cal.dateComponents([.year, .month, .day, .hour, .minute], from: w.lowerBound)
-    let step: (Calendar.Component, Int)
-    switch range {
-    case .hour: c.minute = (c.minute ?? 0) / 15 * 15; step = (.minute, 15)
-    case .day: c.minute = 0; c.hour = (c.hour ?? 0) / 6 * 6; step = (.hour, 6)
-    case .week: c.minute = 0; c.hour = 0; step = (.day, 1)
+    switch step.0 {
+    case .minute: c.minute = (c.minute ?? 0) / step.1 * step.1
+    case .hour: c.minute = 0; c.hour = (c.hour ?? 0) / step.1 * step.1
+    default: c.minute = 0; c.hour = 0
     }
-    let span = w.upperBound.timeIntervalSince(w.lowerBound)
     var t = cal.date(from: c) ?? w.lowerBound
     var out: [Date] = []
     while t <= w.upperBound {
@@ -142,7 +186,7 @@ private struct MetricChart: View {
     @ObservedObject var model: DetailModel
 
     var body: some View {
-        let banded = model.range.period != nil
+        let banded = !model.isRaw
         Chart {
             ForEach(model.series) { s in
                 if banded {
@@ -177,12 +221,16 @@ private struct MetricChart: View {
                 }
             }
         }
-        .chartXScale(domain: model.window)
+        .chartXScale(domain: model.visible)
         .chartYScale(domain: model.yDomain)
+        // zoomed: points past the edges (the padding bucket, the old data before a refetch)
+        .chartPlotStyle { $0.clipped() }
         .chartXAxis {
-            AxisMarks(values: xTicks(model.window, model.range)) { _ in
+            AxisMarks(values: xTicks(model.visible)) { v in
                 AxisGridLine().foregroundStyle(Color.primary.opacity(0.08))
-                AxisValueLabel(format: xAxisFormat(model.range), anchor: .top)
+                AxisValueLabel(anchor: .top) {
+                    if let d = v.as(Date.self) { Text(tickLabel(d)) }
+                }
             }
         }
         .chartYAxis {
@@ -232,8 +280,8 @@ private struct StatusTimeline: View {
             HStack(spacing: 8) {
                 Color.clear.frame(width: labelWidth, height: 1)
                 GeometryReader { geo in
-                    ForEach(xTicks(model.window, model.range), id: \.self) { t in
-                        Text(t, format: xAxisFormat(model.range))
+                    ForEach(xTicks(model.visible), id: \.self) { t in
+                        Text(tickLabel(t))
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                             .fixedSize()
@@ -267,6 +315,8 @@ private struct StatusTimeline: View {
                 Rectangle().fill(Color.primary.opacity(0.6)).frame(width: 1).offset(x: model.fraction(h) * width)
             }
         }
+        // zoomed, a segment can be far wider than the lane; keep the lane's width
+        .frame(width: width, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 
