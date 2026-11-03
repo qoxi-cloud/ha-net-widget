@@ -9,7 +9,7 @@ struct PlotFrameKey: PreferenceKey {
     }
 }
 
-let detailWidth: CGFloat = 380
+let detailWidth: CGFloat = widgetWidth
 
 /// fills whatever height the panel gets (the widget's); the chart takes the slack
 struct DetailView: View {
