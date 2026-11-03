@@ -43,9 +43,11 @@ Open Network dashboard, Quit.
 Starts by itself at login (LaunchAgent, `RunAtLoad`) and is restarted after a crash;
 "Quit" stays quit until the next login. By hand:
 
-    launchctl kickstart gui/$(id -u)/cloud.qoxi.netwidget        # start
-    launchctl kill TERM gui/$(id -u)/cloud.qoxi.netwidget        # stop until next login
-    launchctl kickstart -k gui/$(id -u)/cloud.qoxi.netwidget     # restart
+    launchctl kickstart -k gui/$(id -u)/cloud.qoxi.netwidget     # (re)start, also after "Quit"
+    launchctl bootout gui/$(id -u)/cloud.qoxi.netwidget          # stop until next login
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/cloud.qoxi.netwidget.plist  # start after bootout
+
+A plain `kill` doesn't stop it: launchd restarts anything that didn't exit cleanly.
 
 If it doesn't come up after a reboot, check System Settings → General → Login Items &
 Extensions → Allow in the Background (macOS lists the agent there; switching it off
