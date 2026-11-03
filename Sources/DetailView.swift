@@ -9,6 +9,9 @@ struct PlotFrameKey: PreferenceKey {
     }
 }
 
+let detailWidth: CGFloat = 380
+
+/// fills whatever height the panel gets (the widget's); the chart takes the slack
 struct DetailView: View {
     @ObservedObject var model: DetailModel
     var openInHA: (() -> Void)?
@@ -39,7 +42,7 @@ struct DetailView: View {
                     }
                 }
             }
-            .frame(height: model.target.kind == .status ? 74 : 150)
+            .frame(minHeight: model.target.kind == .status ? 74 : 150, maxHeight: .infinity)
 
             Text(model.hover.map(model.hoverText) ?? model.summary)
                 .font(.system(size: 11))
@@ -60,7 +63,8 @@ struct DetailView: View {
             }
         }
         .padding(16)
-        .frame(width: 380, alignment: .leading)
+        .frame(width: detailWidth, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
         .coordinateSpace(.named("detail"))
         .onPreferenceChange(PlotFrameKey.self) { model.plotFrame = $0 }
     }

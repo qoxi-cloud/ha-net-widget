@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: DesktopPanel?
     private var host: DesktopHostingView<AnyView>?
     private var resize: AnyCancellable?
-    private var detail: (panel: DetailPanel, host: TrackingHostingView<AnyView>, model: DetailModel, watch: AnyCancellable)?
+    private var detail: (panel: DetailPanel, model: DetailModel)?
     private var monitors: [Any] = []
 
     init(snapshotPath: String?) {
@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func fitPanel() {
         guard let panel, let host else { return }
         fit(panel, to: host.fittingSize)
+        layoutDetail()
     }
 
     private func fit(_ window: NSWindow, to size: NSSize) {
@@ -136,12 +137,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func click(at point: CGPoint) {
         guard let target = hitMap.target(at: point) else { return closeDetail() }
         if detail?.model.target == target { return closeDetail() }
-        openDetail(target, anchor: hitMap.frames[target] ?? .zero)
+        openDetail(target)
     }
 
-    private func openDetail(_ target: DetailTarget, anchor: CGRect) {
+    private func openDetail(_ target: DetailTarget) {
         closeDetail()
-        guard let client, let widget = panel, let model = DetailModel(target: target, store: store, client: client) else { return }
+        guard let client, let model = DetailModel(target: target, store: store, client: client) else { return }
         let root = AnyView(
             DetailView(model: model, openInHA: { [weak self, weak model] in
                 guard let self, let model, let base = self.client?.currentBase else { return }
@@ -151,35 +152,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         )
         let host = TrackingHostingView(rootView: root)
-        host.sizingOptions = [.intrinsicContentSize]
+        host.sizingOptions = [] // the panel's frame comes from the widget, the view fills it
         host.onMouse = { [weak model] point in
             guard let model else { return }
             let plot = model.plotFrame.insetBy(dx: 0, dy: -8)
             model.hover = point.flatMap { plot.contains($0) ? model.hoverDate(atX: $0.x) : nil }
         }
-        let size = host.fittingSize
-        let panel = DetailPanel(contentRect: NSRect(origin: .zero, size: size))
+        let panel = DetailPanel(contentRect: NSRect(x: 0, y: 0, width: detailWidth, height: 300))
         panel.contentView = host
-
-        // beside the widget, top aligned with the clicked row; flip left when there's no room
-        let screen = (widget.screen ?? NSScreen.main)?.visibleFrame ?? widget.frame
-        let wf = widget.frame
-        var x = wf.maxX + 12
-        if x + size.width > screen.maxX { x = wf.minX - 12 - size.width }
-        let top = min(wf.maxY - anchor.minY + 16, screen.maxY)
-        let y = max(top - size.height, screen.minY)
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        detail = (panel, model)
+        layoutDetail()
         panel.makeKeyAndOrderFront(nil)
-
-        let watch = model.objectWillChange.sink { [weak self, weak host, weak panel] in
-            DispatchQueue.main.async {
-                guard let self, let host, let panel else { return }
-                self.fit(panel, to: host.fittingSize)
-            }
-        }
-        detail = (panel, host, model, watch)
         model.start()
         installMonitors()
+    }
+
+    /// next to the widget like another macOS widget: same top, same height, the 16 pt
+    /// widget gap; to the left when there's no room on the right
+    private func layoutDetail() {
+        guard let detail, let widget = panel else { return }
+        let wf = widget.frame
+        let screen = (widget.screen ?? NSScreen.main)?.visibleFrame ?? wf
+        var x = wf.maxX + 16
+        if x + detailWidth > screen.maxX { x = wf.minX - 16 - detailWidth }
+        detail.panel.setFrame(NSRect(x: x, y: wf.minY, width: detailWidth, height: wf.height), display: true)
     }
 
     private func closeDetail() {
@@ -226,6 +222,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // subscribe_entities sends its first full batch right after the result
             try? await Task.sleep(for: .seconds(1.5))
             var content = AnyView(WidgetView(store: store))
+            // the detail panel is as tall as the widget
+            let widgetHeight = ImageRenderer(content: WidgetView(store: store)).nsImage?.size.height ?? 358
             if let spec = option("--detail")?.split(separator: ":").map(String.init), spec.count == 3,
                let client, let row = store.rows.first(where: { $0.name.lowercased() == spec[0].lowercased() }) {
                 let kind: DetailKind = spec[1] == "rates" ? .rates : spec[1] == "status" ? .status : .metric(spec[1])
@@ -236,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let w = model.window
                     model.hover = w.lowerBound.addingTimeInterval(w.upperBound.timeIntervalSince(w.lowerBound) * frac)
                 }
-                content = AnyView(DetailView(model: model))
+                content = AnyView(DetailView(model: model).frame(height: widgetHeight))
             }
             let view = content
                 .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color(white: 0.11).opacity(0.92)))
@@ -303,7 +301,8 @@ final class DetailPanel: NSPanel {
         super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        // a window shadow follows the rectangular frame, not the glass: it drew a square outline
+        hasShadow = false
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
         isReleasedWhenClosed = false
