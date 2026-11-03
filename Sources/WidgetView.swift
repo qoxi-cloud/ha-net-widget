@@ -3,8 +3,32 @@ import SwiftUI
 /// two macOS small widgets plus their gap (164 + 16 + 164), so it lines up under them
 let widgetWidth: CGFloat = 344
 
+/// tile frames in widget coordinates; the hosting view hit-tests clicks against them
+/// (SwiftUI taps can't tell a click from a window drag, the mouse never moves in the view)
+final class HitMap {
+    var frames: [DetailTarget: CGRect] = [:]
+
+    func target(at p: CGPoint) -> DetailTarget? { frames.first { $0.value.contains(p) }?.key }
+}
+
+private struct TileFrameKey: PreferenceKey {
+    static let defaultValue: [DetailTarget: CGRect] = [:]
+    static func reduce(value: inout [DetailTarget: CGRect], nextValue: () -> [DetailTarget: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+private extension View {
+    func clickTarget(_ target: DetailTarget) -> some View {
+        background(GeometryReader { g in
+            Color.clear.preference(key: TileFrameKey.self, value: [target: g.frame(in: .named("widget"))])
+        })
+    }
+}
+
 struct WidgetView: View {
     @ObservedObject var store: Store
+    var hitMap: HitMap?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +46,8 @@ struct WidgetView: View {
         .padding(16)
         .frame(width: widgetWidth, alignment: .leading)
         .opacity(isOffline ? 0.6 : 1)
+        .coordinateSpace(.named("widget"))
+        .onPreferenceChange(TileFrameKey.self) { [hitMap] in hitMap?.frames = $0 }
     }
 
     private var isOffline: Bool {
@@ -65,50 +91,60 @@ private struct RowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(statusColor.opacity(0.2))
-                    Image(systemName: "globe")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(statusColor)
-                }
-                .frame(width: 30, height: 30)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(row.name).font(.system(size: 14, weight: .semibold)).fixedSize()
-                        if !row.ponMode.isEmpty {
-                            Text("\(row.ponMode) \(row.ponRates)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    HStack(spacing: 0) {
-                        Text(row.statusText).foregroundStyle(.secondary)
-                        if !row.ip.isEmpty {
-                            Text(" · ").foregroundStyle(.secondary)
-                            Text(row.ip).foregroundStyle(row.ipPublic ? Color.green : Color.orange)
-                        }
-                    }
-                    .font(.system(size: 11.5))
-                    .lineLimit(1)
-                }
-
+                identity.clickTarget(DetailTarget(row: row.id, kind: .status))
                 Spacer(minLength: 6)
-
-                // fixed box sized for the widest value, left-aligned like the ISP card:
-                // the arrows stay put whatever the number of digits
-                ZStack(alignment: .leading) {
-                    rate("arrow.down", "999 Mbit/s", .clear).hidden()
-                    VStack(alignment: .leading, spacing: 2) {
-                        rate("arrow.down", row.down, .blue)
-                        rate("arrow.up", row.up, .green)
-                    }
-                }
+                rates.clickTarget(DetailTarget(row: row.id, kind: .rates))
             }
 
             HStack(spacing: 6) {
-                ForEach(row.stats) { StatTile(stat: $0) }
+                ForEach(row.stats) { stat in
+                    StatTile(stat: stat).clickTarget(DetailTarget(row: row.id, kind: .metric(stat.key)))
+                }
+            }
+        }
+    }
+
+    private var identity: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(statusColor.opacity(0.2))
+                Image(systemName: "globe")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(statusColor)
+            }
+            .frame(width: 30, height: 30)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(row.name).font(.system(size: 14, weight: .semibold)).fixedSize()
+                    if !row.ponMode.isEmpty {
+                        Text("\(row.ponMode) \(row.ponRates)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                HStack(spacing: 0) {
+                    Text(row.statusText).foregroundStyle(.secondary)
+                    if !row.ip.isEmpty {
+                        Text(" · ").foregroundStyle(.secondary)
+                        Text(row.ip).foregroundStyle(row.ipPublic ? Color.green : Color.orange)
+                    }
+                }
+                .font(.system(size: 11.5))
+                .lineLimit(1)
+            }
+        }
+    }
+
+    /// fixed box sized for the widest value, left-aligned like the ISP card:
+    /// the arrows stay put whatever the number of digits
+    private var rates: some View {
+        ZStack(alignment: .leading) {
+            rate("arrow.down", "999 Mbit/s", .clear).hidden()
+            VStack(alignment: .leading, spacing: 2) {
+                rate("arrow.down", row.down, .blue)
+                rate("arrow.up", row.up, .green)
             }
         }
     }

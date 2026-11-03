@@ -12,10 +12,12 @@ enum RowStatus {
 }
 
 struct Stat: Identifiable {
+    /// ONU metric name or "latency"; also the detail chart it opens
+    let key: String
     let label: String
     let value: String
     var tone: Tone = .normal
-    var id: String { label }
+    var id: String { key }
 }
 
 struct ProviderRow: Identifiable {

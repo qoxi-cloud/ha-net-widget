@@ -20,8 +20,10 @@ Discovery mirrors the qoxi Mushroom ISP/ONU cards: `sensor.<gw>_wan_latency_port
 Builds `~/Applications/NetWidget.app` and the LaunchAgent `cloud.qoxi.netwidget`.
 `HA_CLOUD_URL` is optional (LAN only without it).
 
-Debug: `build/NetWidget.app/Contents/MacOS/NetWidget --watch` (prints changes),
-`--snapshot out.png` (renders once with live data).
+Debug (`build/NetWidget.app/Contents/MacOS/NetWidget …`): `--watch` prints changes;
+`--snapshot out.png [--detail <isp>:<rx_power|tx_power|optic_temperature|latency|rates|status>:<1h|24h|7d> [--hover 0.5]]`
+renders the widget or a detail panel once with live data; `--click x,y` clicks the real
+window at widget coordinates and prints the hit map (stop the LaunchAgent first).
 
 ## Token
 
@@ -39,6 +41,17 @@ Change URLs: `defaults write cloud.qoxi.netwidget haURL|haCloudURL <url>` and re
 
 Drag anywhere to move (position is remembered). Right click: Reconnect,
 Open Network dashboard, Quit.
+
+Click (no drag) opens a detail panel beside the widget, like HA's more-info:
+- RX / TX / Optic / Latency tile → history chart: 1h raw states (step line), 24h 5-minute
+  and 7d hourly statistics (mean line + min/max band); thresholds drawn when in range,
+  otherwise the footer gives the margin to the warning level
+- ↓/↑ → download and upload on one chart
+- provider name → WAN / PON status timeline with uptime and outages
+
+Hover shows the value under the cursor; Esc or a click elsewhere closes it; "Open in HA"
+opens the entity history in HA. Data is fetched on open (and every 30 s while open) over
+the same websocket, so it works via the cloud too.
 
 Starts by itself at login (LaunchAgent, `RunAtLoad`) and is restarted after a crash;
 "Quit" stays quit until the next login. By hand:

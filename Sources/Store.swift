@@ -69,7 +69,14 @@ final class Store: ObservableObject {
         return s
     }
 
-    private func number(_ id: String?) -> Double? { value(id).flatMap(Double.init) }
+    func number(_ id: String?) -> Double? { value(id).flatMap(Double.init) }
+
+    func spec(for row: String) -> ProviderSpec? { specs.first { $0.latency == row } }
+
+    /// raw history values are in the entity's display unit
+    func rateScale(of id: String) -> Double {
+        (states[id]?.attributes["unit_of_measurement"] as? String).flatMap { bitScale[$0] } ?? 1
+    }
 
     private func bits(_ id: String?) -> Double? {
         guard let id, let n = number(id) else { return nil }
@@ -120,14 +127,14 @@ final class Store: ObservableObject {
         var stats: [Stat] = []
         if !p.onu.isEmpty {
             stats += [
-                Stat(label: "RX", value: rx.map { String(format: "%.1f dBm", $0) } ?? dash,
+                Stat(key: "rx_power", label: "RX", value: rx.map { String(format: "%.1f dBm", $0) } ?? dash,
                      tone: rx.map { $0 <= -27 ? .danger : $0 <= -24 ? .warning : .normal } ?? .normal),
-                Stat(label: "TX", value: tx.map { String(format: "%.1f dBm", $0) } ?? dash),
-                Stat(label: "Optic", value: optic.map { String(format: "%.0f °C", $0) } ?? dash,
+                Stat(key: "tx_power", label: "TX", value: tx.map { String(format: "%.1f dBm", $0) } ?? dash),
+                Stat(key: "optic_temperature", label: "Optic", value: optic.map { String(format: "%.0f °C", $0) } ?? dash,
                      tone: optic.map { $0 >= 70 ? .danger : $0 >= 60 ? .warning : .normal } ?? .normal),
             ]
         }
-        stats.append(Stat(label: "Latency", value: latency.map(Format.latency) ?? dash,
+        stats.append(Stat(key: "latency", label: "Latency", value: latency.map(Format.latency) ?? dash,
                           tone: latency.map { $0 >= 100 ? .danger : $0 >= 40 ? .warning : .normal } ?? .normal))
 
         return ProviderRow(

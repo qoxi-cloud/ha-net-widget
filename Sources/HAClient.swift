@@ -1,5 +1,10 @@
 import Foundation
 
+struct HAError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 /// Minimal HA websocket client: auth → get_states (discovery) → subscribe_entities
 /// for just the ~30 entities the widget shows. Tries the LAN first, then Nabu
 /// Casa; while on the cloud it probes the LAN and moves back as soon as it
@@ -22,6 +27,7 @@ final class HAClient {
     private var timers: [Timer] = []
     private var pongTimer: Timer?
     private var backoff: TimeInterval = 1
+    private var pending: [Int: CheckedContinuation<Any, Error>] = [:]
 
     var currentBase: URL { bases[current] }
 
@@ -59,7 +65,24 @@ final class HAClient {
         connect()
     }
 
+    /// one-shot command on the live socket (history, statistics); fails fast when offline
+    func request(_ type: String, _ payload: [String: Any]) async throws -> Any {
+        guard authed, task != nil else { throw HAError(message: "Home Assistant is offline") }
+        return try await withCheckedThrowingContinuation { continuation in
+            let id = command(type, payload)
+            pending[id] = continuation
+            let gen = generation
+            schedule(20) { [weak self] in
+                guard let self, gen == self.generation, let c = self.pending.removeValue(forKey: id) else { return }
+                c.resume(throwing: HAError(message: "Home Assistant did not answer"))
+            }
+        }
+    }
+
     private func teardown() {
+        let waiting = pending.values
+        pending.removeAll()
+        waiting.forEach { $0.resume(throwing: HAError(message: "connection lost")) }
         timers.forEach { $0.invalidate() }
         timers.removeAll()
         pongTimer?.invalidate()
@@ -72,6 +95,7 @@ final class HAClient {
         let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
             Task { @MainActor in body() }
         }
+        timers.removeAll { !$0.isValid }
         timers.append(t)
         return t
     }
@@ -137,6 +161,15 @@ final class HAClient {
 
     private func dispatch(_ m: [String: Any]) {
         let id = m["id"] as? Int ?? -1
+        if m["type"] as? String == "result", let continuation = pending.removeValue(forKey: id) {
+            if m["success"] as? Bool == true {
+                continuation.resume(returning: m["result"] ?? NSNull())
+            } else {
+                let message = (m["error"] as? [String: Any])?["message"] as? String ?? "request failed"
+                continuation.resume(throwing: HAError(message: message))
+            }
+            return
+        }
         switch m["type"] as? String {
         case "auth_required":
             send(["type": "auth", "access_token": token])
